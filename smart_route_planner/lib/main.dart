@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:permission_handler/permission_handler.dart';
 
 // IMPORTANT: Replace with your backend URL.
 // Use 10.0.2.2 for Android emulator to connect to localhost on your machine.
@@ -46,6 +47,26 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _origin;
   LatLng? _destination;
   bool _isLoading = false;
+  bool _isLocationPermissionGranted = false; // To track permission status
+
+  @override
+  void initState() {
+    super.initState();
+    _requestLocationPermission();
+  }
+
+  // --- NEW: Function to request location permission ---
+  Future<void> _requestLocationPermission() async {
+    final status = await Permission.location.request();
+    if (status.isGranted) {
+      setState(() {
+        _isLocationPermissionGranted = true;
+      });
+    } else if (status.isPermanentlyDenied) {
+      // Open app settings if permission is permanently denied
+      openAppSettings();
+    }
+  }
 
   // Function to handle map taps to set origin and destination
   void _onMapTapped(LatLng location) {
@@ -125,14 +146,18 @@ class _MapScreenState extends State<MapScreen> {
         }
       } else {
         // Handle error
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error fetching route: ${response.body}')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error fetching route: ${response.body}')),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to connect to the server: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to connect to the server: $e')),
+        );
+      }
     } finally {
       setState(() {
         _isLoading = false;
@@ -160,7 +185,9 @@ class _MapScreenState extends State<MapScreen> {
         onTap: _onMapTapped,
         markers: _markers,
         polylines: _polylines,
-        myLocationButtonEnabled: false,
+        // --- MODIFIED: Enable based on permission status ---
+        myLocationEnabled: _isLocationPermissionGranted,
+        myLocationButtonEnabled: _isLocationPermissionGranted,
         zoomControlsEnabled: true,
       ),
       floatingActionButton: FloatingActionButton(
