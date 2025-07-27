@@ -2,7 +2,7 @@
 
 _Intelligent routing beyond the shortest path, powered by Neo4j and Google Maps._
 
-![Smart Route Planner Thumbnail](https://i.imgur.com/uRcNt56.png)
+![Smart Route Planner Thumbnail](Gemini_Generated_Image_r94bhur94bhur94b.png)
 
 ## About The Project
 
