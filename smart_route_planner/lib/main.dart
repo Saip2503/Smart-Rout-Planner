@@ -4,13 +4,20 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // IMPORTANT: Replace with your backend URL.
-// Use 10.0.2.2 for Android emulator to connect to localhost on your machine.
-// For a physical device, use your machine's local network IP (e.g., http://192.168.1.10:8000).
 const String backendUrl = 'http://10.0.2.2:8000';
+// API Key will now be loaded from the .env file
+final String googleApiKey =
+    dotenv.env['GOOGLE_MAPS_API_KEY'] ?? 'YOUR_DEFAULT_API_KEY';
 
-void main() {
+Future<void> main() async {
+  // Ensure that widgets are initialized
+  WidgetsFlutterBinding.ensureInitialized();
+  // Load the .env file
+  await dotenv.load(fileName: ".env");
   runApp(const MyApp());
 }
 
@@ -47,7 +54,8 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _origin;
   LatLng? _destination;
   bool _isLoading = false;
-  bool _isLocationPermissionGranted = false; // To track permission status
+  bool _isLocationPermissionGranted = false;
+  final PolylinePoints _polylinePoints = PolylinePoints();
 
   @override
   void initState() {
@@ -55,7 +63,6 @@ class _MapScreenState extends State<MapScreen> {
     _requestLocationPermission();
   }
 
-  // --- NEW: Function to request location permission ---
   Future<void> _requestLocationPermission() async {
     final status = await Permission.location.request();
     if (status.isGranted) {
@@ -63,16 +70,13 @@ class _MapScreenState extends State<MapScreen> {
         _isLocationPermissionGranted = true;
       });
     } else if (status.isPermanentlyDenied) {
-      // Open app settings if permission is permanently denied
       openAppSettings();
     }
   }
 
-  // Function to handle map taps to set origin and destination
   void _onMapTapped(LatLng location) {
     setState(() {
       if (_origin == null || (_origin != null && _destination != null)) {
-        // Set origin
         _origin = location;
         _destination = null;
         _markers.clear();
@@ -88,7 +92,6 @@ class _MapScreenState extends State<MapScreen> {
           ),
         );
       } else {
-        // Set destination and fetch route
         _destination = location;
         _markers.add(
           Marker(
@@ -105,7 +108,6 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // Function to call the backend API and get the route
   Future<void> _getRoute() async {
     if (_origin == null || _destination == null) return;
 
@@ -114,6 +116,7 @@ class _MapScreenState extends State<MapScreen> {
     });
 
     try {
+      // 1. Get the optimized waypoint route from our Neo4j backend
       final response = await http.post(
         Uri.parse('$backendUrl/route'),
         headers: {'Content-Type': 'application/json'},
@@ -127,36 +130,99 @@ class _MapScreenState extends State<MapScreen> {
       );
 
       if (response.statusCode == 200) {
-        final List<dynamic> routeData = json.decode(response.body);
-        final points = routeData
-            .map((p) => LatLng(p['lat'], p['lng']))
-            .toList();
+        final dynamic decodedBody = json.decode(response.body);
+        if (decodedBody is List && decodedBody.length >= 2) {
+          List<LatLng> waypoints = decodedBody
+              .map((p) => LatLng(p['lat'], p['lng']))
+              .toList();
 
-        if (points.isNotEmpty) {
-          setState(() {
-            _polylines.add(
-              Polyline(
-                polylineId: const PolylineId('route'),
-                points: points,
-                color: Colors.blue,
-                width: 5,
-              ),
+          // --- NEW: Limit the number of waypoints to avoid API errors ---
+          const int maxWaypoints =
+              23; // Google Directions API limit is 25 (origin + destination + 23 waypoints)
+          if (waypoints.length > maxWaypoints) {
+            final List<LatLng> simplifiedWaypoints = [];
+            // Always include the start point
+            simplifiedWaypoints.add(waypoints.first);
+
+            // Calculate the step to pick points evenly
+            final int step = (waypoints.length - 2) ~/ (maxWaypoints - 2);
+
+            // Pick intermediate points
+            for (int i = 1; i < waypoints.length - 1; i += step) {
+              if (simplifiedWaypoints.length < maxWaypoints - 1) {
+                simplifiedWaypoints.add(waypoints[i]);
+              }
+            }
+
+            // Always include the end point
+            simplifiedWaypoints.add(waypoints.last);
+            waypoints = simplifiedWaypoints;
+          }
+
+          // 2. Get the detailed, road-snapped route from Google Directions API
+          final PolylineResult result = await _polylinePoints
+              .getRouteBetweenCoordinates(
+                request: PolylineRequest(
+                  origin: PointLatLng(
+                    waypoints.first.latitude,
+                    waypoints.first.longitude,
+                  ),
+                  destination: PointLatLng(
+                    waypoints.last.latitude,
+                    waypoints.last.longitude,
+                  ),
+                  mode: TravelMode.driving,
+                  wayPoints: waypoints
+                      .sublist(1, waypoints.length - 1)
+                      .map(
+                        (latlng) => PolylineWayPoint(
+                          location: "${latlng.latitude},${latlng.longitude}",
+                        ),
+                      )
+                      .toList(),
+                ),
+                googleApiKey: googleApiKey,
+              );
+
+          if (result.points.isNotEmpty) {
+            final List<LatLng> polylineCoordinates = result.points
+                .map((point) => LatLng(point.latitude, point.longitude))
+                .toList();
+
+            setState(() {
+              _polylines.add(
+                Polyline(
+                  polylineId: const PolylineId('route'),
+                  points: polylineCoordinates,
+                  color: Colors.deepOrange,
+                  width: 6,
+                ),
+              );
+            });
+          } else {
+            throw Exception(
+              'Could not get route from Google Directions API: ${result.errorMessage}',
             );
-          });
+          }
+        } else {
+          throw Exception('Invalid waypoint data from server.');
         }
       } else {
-        // Handle error
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error fetching route: ${response.body}')),
+            SnackBar(
+              content: Text(
+                'Error fetching route from backend: ${response.body}',
+              ),
+            ),
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to connect to the server: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('An error occurred: $e')));
       }
     } finally {
       setState(() {
@@ -185,7 +251,6 @@ class _MapScreenState extends State<MapScreen> {
         onTap: _onMapTapped,
         markers: _markers,
         polylines: _polylines,
-        // --- MODIFIED: Enable based on permission status ---
         myLocationEnabled: _isLocationPermissionGranted,
         myLocationButtonEnabled: _isLocationPermissionGranted,
         zoomControlsEnabled: true,
