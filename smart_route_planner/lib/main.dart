@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async'; // Import for Completer
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -28,7 +29,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Smart Route Planner',
-      theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
+      theme: ThemeData(primarySwatch: Colors.deepOrange, useMaterial3: true),
       home: const MapScreen(),
     );
   }
@@ -42,13 +43,13 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  // Map state
+  final Completer<GoogleMapController> _controller = Completer();
+
   static const CameraPosition _initialPosition = CameraPosition(
     target: LatLng(19.0760, 72.8777), // Centered on Mumbai
     zoom: 12,
   );
 
-  // Markers, polylines, and route logic
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
   LatLng? _origin;
@@ -56,6 +57,9 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoading = false;
   bool _isLocationPermissionGranted = false;
   final PolylinePoints _polylinePoints = PolylinePoints();
+
+  // State for travel mode
+  TravelMode _travelMode = TravelMode.driving;
 
   @override
   void initState() {
@@ -76,11 +80,11 @@ class _MapScreenState extends State<MapScreen> {
 
   void _onMapTapped(LatLng location) {
     setState(() {
+      _polylines.clear(); // Clear previous route on new tap
       if (_origin == null || (_origin != null && _destination != null)) {
         _origin = location;
-        _destination = null;
+        _destination = null; // Reset destination
         _markers.clear();
-        _polylines.clear();
         _markers.add(
           Marker(
             markerId: const MarkerId('origin'),
@@ -116,7 +120,6 @@ class _MapScreenState extends State<MapScreen> {
     });
 
     try {
-      // 1. Get the optimized waypoint route from our Neo4j backend
       final response = await http.post(
         Uri.parse('$backendUrl/route'),
         headers: {'Content-Type': 'application/json'},
@@ -136,30 +139,19 @@ class _MapScreenState extends State<MapScreen> {
               .map((p) => LatLng(p['lat'], p['lng']))
               .toList();
 
-          // --- NEW: Limit the number of waypoints to avoid API errors ---
-          const int maxWaypoints =
-              23; // Google Directions API limit is 25 (origin + destination + 23 waypoints)
+          const int maxWaypoints = 23;
           if (waypoints.length > maxWaypoints) {
-            final List<LatLng> simplifiedWaypoints = [];
-            // Always include the start point
-            simplifiedWaypoints.add(waypoints.first);
-
-            // Calculate the step to pick points evenly
+            final List<LatLng> simplifiedWaypoints = [waypoints.first];
             final int step = (waypoints.length - 2) ~/ (maxWaypoints - 2);
-
-            // Pick intermediate points
             for (int i = 1; i < waypoints.length - 1; i += step) {
               if (simplifiedWaypoints.length < maxWaypoints - 1) {
                 simplifiedWaypoints.add(waypoints[i]);
               }
             }
-
-            // Always include the end point
             simplifiedWaypoints.add(waypoints.last);
             waypoints = simplifiedWaypoints;
           }
 
-          // 2. Get the detailed, road-snapped route from Google Directions API
           final PolylineResult result = await _polylinePoints
               .getRouteBetweenCoordinates(
                 request: PolylineRequest(
@@ -171,7 +163,7 @@ class _MapScreenState extends State<MapScreen> {
                     waypoints.last.latitude,
                     waypoints.last.longitude,
                   ),
-                  mode: TravelMode.driving,
+                  mode: _travelMode, // Use selected travel mode
                   wayPoints: waypoints
                       .sublist(1, waypoints.length - 1)
                       .map(
@@ -188,7 +180,6 @@ class _MapScreenState extends State<MapScreen> {
             final List<LatLng> polylineCoordinates = result.points
                 .map((point) => LatLng(point.latitude, point.longitude))
                 .toList();
-
             setState(() {
               _polylines.add(
                 Polyline(
@@ -199,10 +190,16 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               );
             });
-          } else {
-            throw Exception(
-              'Could not get route from Google Directions API: ${result.errorMessage}',
+
+            final GoogleMapController controller = await _controller.future;
+            controller.animateCamera(
+              CameraUpdate.newLatLngBounds(
+                _createLatLngBounds(polylineCoordinates),
+                100.0,
+              ),
             );
+          } else {
+            throw Exception('Could not get route: ${result.errorMessage}');
           }
         } else {
           throw Exception('Invalid waypoint data from server.');
@@ -210,11 +207,7 @@ class _MapScreenState extends State<MapScreen> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Error fetching route from backend: ${response.body}',
-              ),
-            ),
+            SnackBar(content: Text('Error from backend: ${response.body}')),
           );
         }
       }
@@ -229,6 +222,35 @@ class _MapScreenState extends State<MapScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  LatLngBounds _createLatLngBounds(List<LatLng> positions) {
+    final southwest = positions.reduce(
+      (value, element) => LatLng(
+        value.latitude < element.latitude ? value.latitude : element.latitude,
+        value.longitude < element.longitude
+            ? value.longitude
+            : element.longitude,
+      ),
+    );
+    final northeast = positions.reduce(
+      (value, element) => LatLng(
+        value.latitude > element.latitude ? value.latitude : element.latitude,
+        value.longitude > element.longitude
+            ? value.longitude
+            : element.longitude,
+      ),
+    );
+    return LatLngBounds(southwest: southwest, northeast: northeast);
+  }
+
+  void _resetMap() {
+    setState(() {
+      _markers.clear();
+      _polylines.clear();
+      _origin = null;
+      _destination = null;
+    });
   }
 
   @override
@@ -246,24 +268,70 @@ class _MapScreenState extends State<MapScreen> {
             ),
         ],
       ),
-      body: GoogleMap(
-        initialCameraPosition: _initialPosition,
-        onTap: _onMapTapped,
-        markers: _markers,
-        polylines: _polylines,
-        myLocationEnabled: _isLocationPermissionGranted,
-        myLocationButtonEnabled: _isLocationPermissionGranted,
-        zoomControlsEnabled: true,
+      body: Stack(
+        children: [
+          GoogleMap(
+            initialCameraPosition: _initialPosition,
+            onMapCreated: (GoogleMapController controller) {
+              _controller.complete(controller);
+            },
+            onTap: _onMapTapped,
+            markers: _markers,
+            polylines: _polylines,
+            myLocationEnabled: _isLocationPermissionGranted,
+            myLocationButtonEnabled: _isLocationPermissionGranted,
+            zoomControlsEnabled: false,
+          ),
+          // --- Travel Mode Selection UI ---
+          Positioned(
+            top: 10,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Wrap(
+                spacing: 8.0,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Driving'),
+                    selected: _travelMode == TravelMode.driving,
+                    onSelected: (selected) {
+                      setState(() {
+                        _travelMode = TravelMode.driving;
+                      });
+                      if (_origin != null && _destination != null) _getRoute();
+                    },
+                    avatar: const Icon(Icons.directions_car),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Walking'),
+                    selected: _travelMode == TravelMode.walking,
+                    onSelected: (selected) {
+                      setState(() {
+                        _travelMode = TravelMode.walking;
+                      });
+                      if (_origin != null && _destination != null) _getRoute();
+                    },
+                    avatar: const Icon(Icons.directions_walk),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Biking'),
+                    selected: _travelMode == TravelMode.bicycling,
+                    onSelected: (selected) {
+                      setState(() {
+                        _travelMode = TravelMode.bicycling;
+                      });
+                      if (_origin != null && _destination != null) _getRoute();
+                    },
+                    avatar: const Icon(Icons.directions_bike),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          setState(() {
-            _markers.clear();
-            _polylines.clear();
-            _origin = null;
-            _destination = null;
-          });
-        },
+        onPressed: _resetMap,
         tooltip: 'Clear',
         child: const Icon(Icons.clear),
       ),

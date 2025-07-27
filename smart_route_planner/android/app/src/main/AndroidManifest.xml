@@ -5,7 +5,7 @@
     <application
         android:label="smart_route_planner"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@drawable/srpicon.png">
         <activity
             android:name=".MainActivity"
             android:exported="true"
