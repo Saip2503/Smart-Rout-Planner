@@ -9,7 +9,8 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // IMPORTANT: Replace with your backend URL.
-const String backendUrl = 'http://10.0.2.2:8000';
+const String backendUrl =
+    'https://smart-route-planner-888766503240.asia-south1.run.app';
 // API Key will now be loaded from the .env file
 final String googleApiKey =
     dotenv.env['GOOGLE_MAPS_API_KEY'] ?? 'YOUR_DEFAULT_API_KEY';

@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "37956014100",
+    "project_id": "smart-route-planner-78cd3",
+    "storage_bucket": "smart-route-planner-78cd3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:37956014100:android:1bfef12ea736124c245701",
+        "android_client_info": {
+          "package_name": "com.example.smart_route_planner"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "37956014100-2dp0kgs2ubr06ssjum5gh31pq03a89aa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.smart_route_planner",
+            "certificate_hash": "26968cb789915f7d7a9e01d0447fa30860843528"
+          }
+        },
+        {
+          "client_id": "37956014100-ej8b3hf16fecvp538jgimee4jhren0jn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtDQmY1mKYt2WKXF2LsXwW3IdzK7kKST8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "37956014100-ej8b3hf16fecvp538jgimee4jhren0jn.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
