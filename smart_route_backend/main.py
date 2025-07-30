@@ -1,10 +1,11 @@
 # main.py
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from neo4j import GraphDatabase
 from typing import List
-from fastapi.responses import JSONResponse # Import JSONResponse
+from fastapi.responses import JSONResponse
 
 # --- Pydantic Models for Request Body ---
 class Coordinate(BaseModel):
@@ -22,20 +23,27 @@ app = FastAPI(
 )
 
 # --- CORS Middleware ---
-# Allows your Flutter app to make requests to this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Neo4j Connection ---
-# IMPORTANT: Make sure this password is correct
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "saipawar25") # Replace with your actual password
-driver = GraphDatabase.driver(URI, auth=AUTH)
+# --- MODIFIED: Removed local fallback to ensure cloud variables are used ---
+# This code will now only read from the environment variables set by Cloud Run.
+NEO4J_URI = os.environ.get("NEO4J_URI")
+NEO4J_USER = "neo4j" # Default user for AuraDB
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+
+# Add a check to ensure the variables were loaded correctly
+if not NEO4J_URI or not NEO4J_PASSWORD:
+    raise ValueError("FATAL: NEO4J_URI and NEO4J_PASSWORD environment variables were not found.")
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
 
 # --- Neo4j Query Functions ---
 def find_closest_node(tx, lat, lng):
@@ -60,20 +68,13 @@ def get_shortest_path(tx, origin_node_id, dest_node_id):
     MATCH (start:Location), (end:Location)
     WHERE elementId(start) = $origin_id AND elementId(end) = $dest_id
     CALL apoc.algo.dijkstra(start, end, 'ROAD', 'weight') YIELD path, weight
-    // Return the list of nodes in the path
     RETURN [node in nodes(path) | {lat: node.lat, lng: node.lng}] AS route
     """
     result = tx.run(query, origin_id=origin_node_id, dest_id=dest_node_id)
     record = result.single()
-    
-    if record and record["route"]:
-        # Return a standard list of dictionaries
-        return [dict(p) for p in record["route"]]
-    else:
-        return []
+    return [dict(p) for p in record["route"]] if record and record["route"] else []
 
 # --- API Endpoint ---
-# --- MODIFIED: Removed response_model and will return a manual JSONResponse ---
 @app.post("/route")
 def get_optimized_route(req: RouteRequest):
     """
@@ -85,12 +86,9 @@ def get_optimized_route(req: RouteRequest):
         dest_node = session.read_transaction(find_closest_node, req.destination.lat, req.destination.lng)
 
         if not origin_node or not dest_node:
-            # Return an empty list in a JSON response
             return JSONResponse(content=[])
 
         route_coordinates = session.read_transaction(get_shortest_path, origin_node.element_id, dest_node.element_id)
-        
-        # Manually create and return a JSONResponse to ensure correct format
         return JSONResponse(content=route_coordinates)
 
 # --- To run the server ---
